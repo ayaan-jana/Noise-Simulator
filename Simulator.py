@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 # -------------------------
-# Manual secrets path (update if needed)
+# secrets fetching for database
 # -------------------------
 CUSTOM_SECRET_PATH = r"C:\Users\ayanj\Desktop\Simulator\secrets.toml"
 APP_DIR = Path(__file__).resolve().parent
@@ -43,7 +43,7 @@ def db_config_valid(secrets: dict):
     return True, None
 
 # ==========================================================
-# POSTGRESQL SUPPORT
+# POSTGRESQL CONNECTION
 # ==========================================================
 def get_db_connection():
     ok, missing = db_config_valid(my_secrets)
@@ -125,13 +125,13 @@ def eval_expr(x, expr):
     return eval(expr, {"__builtins__": {}}, allowed)
 
 # ==========================================================
-# MOCK DB SEND
+# MOCK DB FEATURE
 # ==========================================================
 def mock_send_to_db(record):
     print("STREAM:", record)
 
 # ==========================================================
-# PLOTTING FUNCTION (returns CSV and PNG bytes too)
+# PLOTTING FUNCTION (returns CSV and PNG)
 # ==========================================================
 def plot_to_streamlit(
     time_values, y, noisy=None, title="Plot",
@@ -146,7 +146,7 @@ def plot_to_streamlit(
     ax.legend(); ax.set_title(title); ax.grid(True)
     st.pyplot(fig)
 
-    # CSV bytes
+    # CSV
     csv_buf = BytesIO()
     data = {"time": time_values, "clean_y": y}
     if time_deltas is not None:
@@ -158,7 +158,7 @@ def plot_to_streamlit(
     df.to_csv(csv_buf, index=False)
     csv_buf.seek(0)
 
-    # PNG bytes
+    # PNG
     png_buf = BytesIO()
     fig.savefig(png_buf, format="png", dpi=150, bbox_inches="tight")
     png_buf.seek(0)
@@ -177,7 +177,7 @@ def plot_to_streamlit(
     return df, stats, csv_buf.getvalue(), png_buf.getvalue()
 
 # ==========================================================
-# NOISE (NUMPY)
+# NOISE (USING NUMPY)
 # ==========================================================
 def gaussian_noise(size, sigma):
     return np.random.normal(0.0, sigma, size)
@@ -198,8 +198,8 @@ def ordinal(n: int) -> str:
 DEFAULT_TIME_CONFIG = {
     "time_unit": "Milliseconds",
     "time_start": 0.0,
-    "time_end": 20000.0,
-    "time_interval": 50.0,
+    "time_end": 2000.0,
+    "time_interval": 100.0,
 }
 
 
@@ -396,7 +396,7 @@ with sidebar_card("Ingestion Mode"):
         st.sidebar.info("Mock Only mode")
 
 # -------------------------
-# Dynamic expression UI (aligned inputs with remove button)
+# Dynamic expression UI
 # -------------------------
 st.markdown("### Multi-expression configuration")
 
