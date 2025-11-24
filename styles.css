@@ -1,0 +1,146 @@
+.stream-control {
+    max-width: 920px;
+    margin: 0 auto 1rem auto;
+    padding: 0.25rem;
+}
+
+.custom-btn {
+    width: 100%;
+    padding: 0.85rem 1.4rem;
+    font-weight: 700;
+    border-radius: 12px;
+    border: none;
+    color: #ffffff !important;
+    background: linear-gradient(135deg, #256eff, #6c63ff);
+    box-shadow: 0px 8px 20px rgba(37, 110, 255, 0.22);
+    transition: box-shadow 0.15s ease, transform 0.08s ease;
+    text-align: center;
+}
+
+.custom-btn:hover {
+    box-shadow: 0px 10px 26px rgba(37, 110, 255, 0.30);
+    transform: translateY(-2px);
+}
+
+.custom-btn:active {
+    transform: translateY(0px) scale(0.995);
+    box-shadow: 0px 6px 16px rgba(37, 110, 255, 0.20);
+}
+
+.custom-stop {
+    width: 100%;
+    padding: 0.7rem 1rem;
+    font-weight: 700;
+    border-radius: 12px;
+    border: none;
+    color: #fff !important;
+    background: linear-gradient(135deg, #ff5f6d, #ffc371);
+    box-shadow: 0px 8px 20px rgba(255, 95, 109, 0.18);
+}
+
+.custom-stop:hover {
+    box-shadow: 0px 10px 26px rgba(255, 95, 109, 0.26);
+    transform: translateY(-2px);
+}
+
+div[data-testid="stButton"] button[kind="secondary"] {
+    padding: 0.35rem 0.5rem;
+    background: linear-gradient(135deg, #ff4d4f, #ff8c66);
+    color: #ffffff !important;
+    border-radius: 10px;
+    font-weight: 700;
+    border: none;
+    min-width: 48px;
+    transition: box-shadow 0.12s ease, transform 0.12s ease;
+}
+
+div[data-testid="stButton"] button[kind="secondary"]:hover {
+    box-shadow: 0px 6px 14px rgba(255, 77, 79, 0.35);
+    transform: translateY(-1px);
+}
+
+div[data-testid="stButton"] button[kind="secondary"]:active {
+    transform: translateY(0px) scale(0.98);
+    box-shadow: 0px 4px 10px rgba(255, 77, 79, 0.28);
+}
+
+.download-row {
+    display: flex;
+    gap: 8px;
+}
+
+.expr-label {
+    font-weight: 650;
+    color: #3b3b3b;
+    margin-top: 0.35rem;
+}
+
+.expr-label.small {
+    font-size: 0.78rem;
+    color: #5a5a5a;
+    margin-top: 0;
+    margin-bottom: 0.1rem;
+}
+
+[data-testid="stSidebar"] {
+    background: #0f172a;
+    border-right: 1px solid #1e293b;
+    color: #e2e8f0;
+}
+
+[data-testid="stSidebar"] * {
+    color: #e2e8f0 !important;
+}
+
+.sidebar-card {
+    background: #1e293b;
+    border-radius: 16px;
+    padding: 1rem 1.1rem 1.2rem;
+    box-shadow: 0 12px 25px rgba(2, 6, 23, 0.55);
+    margin-bottom: 1rem;
+    border: 1px solid rgba(99, 102, 241, 0.35);
+}
+
+.sidebar-card-title {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: #c7d2fe !important;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 0.6rem;
+}
+
+[data-testid="stSidebar"] label {
+    font-weight: 600 !important;
+    color: #e0e7ff !important;
+}
+
+.download-card {
+    width: 100%;
+    background: transparent;
+    border-radius: 12px;
+    padding: 0.25rem;
+    border: 1px solid rgba(99, 102, 241, 0.25);
+}
+
+div[data-testid="stDownloadButton"] button {
+    width: 100%;
+    border-radius: 8px;
+    font-weight: 600;
+    padding: 0.55rem 1rem;
+    color: #0f172a !important;
+    background: rgba(226, 232, 240, 0.9);
+    border: 1px solid rgba(148, 163, 184, 0.7);
+    box-shadow: none;
+    transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+div[data-testid="stDownloadButton"] button:hover {
+    background: rgba(226, 232, 240, 1);
+    border-color: rgba(99, 102, 241, 0.6);
+}
+
+div[data-testid="stDownloadButton"] button:active {
+    background: rgba(203, 213, 225, 1);
+}
+
