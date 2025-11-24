@@ -4,10 +4,10 @@ import pandas as pd
 import math
 import random
 import time as pytime
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt  # pyright: ignore[reportMissingImports]
 from io import BytesIO
 import re
-import psycopg2
+import psycopg2  # pyright: ignore[reportMissingModuleSource]
 import toml
 from contextlib import contextmanager
 from pathlib import Path
