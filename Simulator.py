@@ -184,6 +184,54 @@ def gaussian_noise(size, sigma):
 def uniform_noise(size, amp):
     return np.random.uniform(-amp, amp, size)
 
+
+def sample_noise_array(length: int, noise_kind: str, strength: float):
+    if length <= 0:
+        return np.zeros(0, dtype=float)
+    if noise_kind == "Gaussian":
+        return gaussian_noise(length, strength)
+    if noise_kind == "Uniform":
+        return uniform_noise(length, strength)
+    return np.zeros(length, dtype=float)
+
+
+def prepare_noise_buffers(total_len: int, need_secondary: bool, mode_label: str, noise_kind: str, strength: float, seed_hint):
+    signature = {
+        "mode": mode_label,
+        "noise_type": noise_kind,
+        "noise_strength": float(strength),
+        "total_len": int(total_len),
+        "need_secondary": bool(need_secondary),
+        "seed_hint": seed_hint,
+    }
+    primary_key = "noise_primary_array"
+    secondary_key = "noise_secondary_array"
+    stored_sig = st.session_state.get("noise_signature")
+    primary_list = st.session_state.get(primary_key)
+    mismatch = (
+        stored_sig != signature
+        or primary_list is None
+        or len(primary_list) != total_len
+    )
+    if mismatch:
+        primary_noise = sample_noise_array(total_len, noise_kind, strength)
+        st.session_state[primary_key] = primary_noise.tolist()
+        if need_secondary:
+            secondary_noise = sample_noise_array(total_len, noise_kind, strength)
+            st.session_state[secondary_key] = secondary_noise.tolist()
+        else:
+            st.session_state.pop(secondary_key, None)
+        st.session_state["noise_signature"] = signature
+    primary_arr = np.asarray(st.session_state.get(primary_key, []), dtype=float)
+    if len(primary_arr) != total_len:
+        primary_arr = np.zeros(total_len, dtype=float)
+    secondary_arr = None
+    if need_secondary:
+        secondary_arr = np.asarray(st.session_state.get(secondary_key, []), dtype=float)
+        if len(secondary_arr) != total_len:
+            secondary_arr = np.zeros(total_len, dtype=float)
+    return primary_arr, secondary_arr
+
 # ==========================================================
 # Misc helpers
 # ==========================================================
@@ -197,6 +245,7 @@ def ordinal(n: int) -> str:
 
 DEFAULT_TIME_CONFIG = {
     "time_unit": "Milliseconds",
+    "time_interval_unit": "Milliseconds",
     "time_start": 0.0,
     "time_end": 2000.0,
     "time_interval": 100.0,
@@ -227,7 +276,13 @@ def validate_time_config(cfg: dict, label: str):
 def build_time_values(cfg: dict):
     start = float(cfg.get("time_start", 0.0))
     end = float(cfg.get("time_end", 0.0))
-    interval = float(cfg.get("time_interval", 1.0))
+    interval_raw = float(cfg.get("time_interval", 1.0))
+    primary_unit = cfg.get("time_unit", "Milliseconds")
+    interval_unit = cfg.get("time_interval_unit", primary_unit)
+    primary_mult = time_unit_multiplier(primary_unit)
+    interval_mult = time_unit_multiplier(interval_unit)
+    conversion = (interval_mult / primary_mult) if primary_mult else 1.0
+    interval = interval_raw * conversion
     values = np.arange(start, end, interval)
     if values.size == 0 or values[-1] < end:
         values = np.append(values, end)
@@ -263,11 +318,12 @@ def render_download_button(label, data, filename, mime, key):
 
 def render_time_inputs_ui(item: dict, prefix: str):
     unit_options = ["Milliseconds", "Seconds"]
-    cols = st.columns([0.2, 0.266, 0.266, 0.268])
+    cols = st.columns([0.17, 0.22, 0.22, 0.2, 0.19])
     cols[0].markdown("<div class='expr-label small'>Time Unit</div>", unsafe_allow_html=True)
     cols[1].markdown("<div class='expr-label small'>Start</div>", unsafe_allow_html=True)
     cols[2].markdown("<div class='expr-label small'>End</div>", unsafe_allow_html=True)
     cols[3].markdown("<div class='expr-label small'>Interval</div>", unsafe_allow_html=True)
+    cols[4].markdown("<div class='expr-label small'>Interval Unit</div>", unsafe_allow_html=True)
     current_unit = item.get("time_unit", "Milliseconds")
     if current_unit not in unit_options:
         current_unit = "Milliseconds"
@@ -301,10 +357,38 @@ def render_time_inputs_ui(item: dict, prefix: str):
         key=f"time_interval_{prefix}",
         label_visibility="collapsed",
     )
+    interval_unit_current = item.get("time_interval_unit", item.get("time_unit", "Milliseconds"))
+    if interval_unit_current not in unit_options:
+        interval_unit_current = "Milliseconds"
+    interval_unit_idx = unit_options.index(interval_unit_current)
+    new_interval_unit = cols[4].selectbox(
+        f"time_interval_unit_{prefix}",
+        options=unit_options,
+        index=interval_unit_idx,
+        key=f"time_interval_unit_{prefix}",
+        label_visibility="collapsed",
+    )
     item["time_unit"] = new_unit
+    item["time_interval_unit"] = new_interval_unit
     item["time_start"] = new_start
     item["time_end"] = new_end
     item["time_interval"] = new_interval
+
+
+def reset_stream_buffers():
+    keys = [
+        "streamed_times",
+        "streamed_clean_primary",
+        "streamed_noisy_primary",
+        "streamed_clean_secondary",
+        "streamed_noisy_secondary",
+        "noise_primary_array",
+        "noise_secondary_array",
+        "noise_signature",
+    ]
+    for key in keys:
+        if key in st.session_state:
+            del st.session_state[key]
 
 # ==========================================================
 # APP UI + State Setup
@@ -492,31 +576,21 @@ elif mode == "2D Expression":
 # -------------------------
 def build_combined_1d():
     clean_segments = []
-    noisy_segments = []
     time_segments = []
     offset = 0.0
     for i, item in enumerate(st.session_state.expr_list):
         label = f"{ordinal(i+1)} expression"
         t_eval, t_global, offset = generate_time_series(item, offset, label)
         y_clean = eval_expr(t_eval, item["expr"])
-        if noise_type == "Gaussian":
-            y_noisy = y_clean + gaussian_noise(len(t_eval), noise_strength)
-        elif noise_type == "Uniform":
-            y_noisy = y_clean + uniform_noise(len(t_eval), noise_strength)
-        else:
-            y_noisy = y_clean
         clean_segments.append(y_clean)
-        noisy_segments.append(y_noisy)
         time_segments.append(t_global)
     times = np.concatenate(time_segments) if time_segments else np.array([])
     clean = np.concatenate(clean_segments) if clean_segments else np.array([])
-    noisy = np.concatenate(noisy_segments) if noisy_segments else np.array([])
-    return times, clean, noisy
+    return times, clean
 
 def build_combined_straight():
     clean_x_parts = []
     clean_y_parts = []
-    noisy_y_parts = []
     time_parts = []
     offset = 0.0
     for i, seg in enumerate(st.session_state.segments):
@@ -525,92 +599,218 @@ def build_combined_straight():
         pts = len(t_eval)
         x_vals = np.linspace(seg["ax"], seg["bx"], pts)
         y_vals = np.linspace(seg["ay"], seg["by"], pts)
-        if noise_type == "Gaussian":
-            y_noisy = y_vals + gaussian_noise(pts, noise_strength)
-        elif noise_type == "Uniform":
-            y_noisy = y_vals + uniform_noise(pts, noise_strength)
-        else:
-            y_noisy = y_vals
         clean_x_parts.append(x_vals)
         clean_y_parts.append(y_vals)
-        noisy_y_parts.append(y_noisy)
         time_parts.append(t_global)
     times = np.concatenate(time_parts) if time_parts else np.array([])
     clean_x = np.concatenate(clean_x_parts) if clean_x_parts else np.array([])
     clean_y = np.concatenate(clean_y_parts) if clean_y_parts else np.array([])
-    noisy_y = np.concatenate(noisy_y_parts) if noisy_y_parts else np.array([])
-    return times, clean_x, clean_y, noisy_y
+    return times, clean_x, clean_y
 
 def build_combined_2d():
-    x_parts = []; y_parts = []; noisy_x_parts = []; noisy_y_parts = []; time_parts = []
+    x_parts = []; y_parts = []; time_parts = []
     offset = 0.0
     for i, item in enumerate(st.session_state.expr2d_list):
         label = f"{ordinal(i+1)} 2D expression"
         t_eval, t_global, offset = generate_time_series(item, offset, label)
         x_clean = eval_expr(t_eval, item["x"])
         y_clean = eval_expr(t_eval, item["y"])
-        if noise_type == "Gaussian":
-            x_noisy = x_clean + gaussian_noise(len(t_eval), noise_strength)
-            y_noisy = y_clean + gaussian_noise(len(t_eval), noise_strength)
-        elif noise_type == "Uniform":
-            x_noisy = x_clean + uniform_noise(len(t_eval), noise_strength)
-            y_noisy = y_clean + uniform_noise(len(t_eval), noise_strength)
-        else:
-            x_noisy = x_clean; y_noisy = y_clean
         x_parts.append(x_clean); y_parts.append(y_clean)
-        noisy_x_parts.append(x_noisy); noisy_y_parts.append(y_noisy)
         time_parts.append(t_global)
     times = np.concatenate(time_parts) if time_parts else np.array([])
     clean_x = np.concatenate(x_parts) if x_parts else np.array([])
     clean_y = np.concatenate(y_parts) if y_parts else np.array([])
-    noisy_x = np.concatenate(noisy_x_parts) if noisy_x_parts else np.array([])
-    noisy_y = np.concatenate(noisy_y_parts) if noisy_y_parts else np.array([])
-    return times, clean_x, clean_y, noisy_x, noisy_y
+    return times, clean_x, clean_y
 
-# Build arrays and render plots; capture csv/png bytes to show download buttons side-by-side
+
+TRIG_BASE_PERIOD = {"sin": 2 * np.pi, "cos": 2 * np.pi, "tan": np.pi}
+
+
+def _extract_trig_args(expr: str):
+    args = []
+    name_map = ("sin", "cos", "tan")
+    i = 0
+    while i < len(expr):
+        matched = False
+        for name in name_map:
+            prefix = f"{name}("
+            if expr.startswith(prefix, i):
+                j = i + len(prefix)
+                depth = 1
+                start = j
+                while j < len(expr) and depth > 0:
+                    if expr[j] == "(":
+                        depth += 1
+                    elif expr[j] == ")":
+                        depth -= 1
+                    j += 1
+                if depth == 0:
+                    args.append((name, expr[start:j - 1].strip()))
+                    i = j
+                    matched = True
+                    break
+        if not matched:
+            i += 1
+    return args
+
+
+def _estimate_linear_coeff(arg_expr: str):
+    delta = 1e-4
+    try:
+        base = float(eval_expr(0.0, arg_expr))
+        shifted = float(eval_expr(delta, arg_expr))
+    except Exception:
+        return None
+    coeff = (shifted - base) / delta
+    if not math.isfinite(coeff) or abs(coeff) < 1e-8:
+        return None
+    return coeff
+
+
+def estimate_expression_period(expr: str):
+    periods = []
+    for trig_name, arg_expr in _extract_trig_args(expr):
+        coeff = _estimate_linear_coeff(arg_expr)
+        if coeff is None:
+            continue
+        base = TRIG_BASE_PERIOD.get(trig_name)
+        if base is None:
+            continue
+        period = base / abs(coeff)
+        if math.isfinite(period) and period > 0:
+            periods.append(period)
+    if periods:
+        return float(max(periods))
+    return None
+
+
+def _preview_point_count(span: float) -> int:
+    span = max(span, 1e-3)
+    target = int(span * 240)
+    return max(240, min(2400, target if target > 0 else 240))
+
+
+def build_preview_1d():
+    time_sections = []
+    value_sections = []
+    offset = 0.0
+    for item in st.session_state.expr_list:
+        span = estimate_expression_period(item["expr"])
+        if span is None or not math.isfinite(span):
+            span = max(1.0, float(item.get("time_end", 1.0) - item.get("time_start", 0.0)))
+        pts = _preview_point_count(span)
+        local_t = np.linspace(0.0, span, pts)
+        y_vals = eval_expr(local_t, item["expr"])
+        time_sections.append(offset + local_t)
+        value_sections.append(y_vals)
+        offset += span
+    if not time_sections:
+        return np.array([]), np.array([])
+    return np.concatenate(time_sections), np.concatenate(value_sections)
+
+
+def build_preview_straight():
+    time_sections = []
+    y_sections = []
+    offset = 0.0
+    for seg in st.session_state.segments:
+        span = max(1.0, float(seg.get("time_end", 1.0) - seg.get("time_start", 0.0)))
+        pts = _preview_point_count(span)
+        local_t = np.linspace(0.0, span, pts)
+        y_vals = np.linspace(seg["ay"], seg["by"], pts)
+        time_sections.append(offset + local_t)
+        y_sections.append(y_vals)
+        offset += span
+    if not time_sections:
+        return np.array([]), np.array([])
+    return np.concatenate(time_sections), np.concatenate(y_sections)
+
+
+def build_preview_2d():
+    x_sections = []
+    y_sections = []
+    for item in st.session_state.expr2d_list:
+        period_x = estimate_expression_period(item["x"])
+        period_y = estimate_expression_period(item["y"])
+        spans = [p for p in (period_x, period_y) if p is not None and math.isfinite(p) and p > 0]
+        span = max(spans) if spans else max(1.0, float(item.get("time_end", 1.0) - item.get("time_start", 0.0)))
+        pts = _preview_point_count(span)
+        local_t = np.linspace(0.0, span, pts)
+        x_vals = eval_expr(local_t, item["x"])
+        y_vals = eval_expr(local_t, item["y"])
+        x_sections.append(x_vals)
+        y_sections.append(y_vals)
+    if not x_sections:
+        return np.array([]), np.array([])
+    return np.concatenate(x_sections), np.concatenate(y_sections)
+
+# Build arrays for preview/random clean graph and separate clean arrays for streaming
+stream_primary = None
+stream_secondary = None
+combined_time = np.array([])
+
 if mode == "1D Expression":
-    combined_time, combined_clean, combined_noisy = build_combined_1d()
+    preview_time, preview_clean = build_preview_1d()
     fig, ax = plt.subplots(figsize=(8,4))
-    ax.plot(combined_time, combined_clean, label="Clean", linewidth=clean_linewidth, color=clean_color)
-    ax.legend(); ax.grid(True); ax.set_title("Multi 1D Expression (Clean Preview)")
-    ax.set_xlabel("time (s)")
+    ax.plot(preview_time, preview_clean, label="Clean", linewidth=clean_linewidth, color=clean_color)
+    if preview_time.size:
+        ax.set_xlim(preview_time.min(), preview_time.max())
+    if preview_clean.size:
+        y_min, y_max = float(np.min(preview_clean)), float(np.max(preview_clean))
+        y_pad = max(1e-3, (y_max - y_min) * 0.05)
+        ax.set_ylim(y_min - y_pad, y_max + y_pad)
+    ax.legend(); ax.grid(True); ax.set_title("Expression Preview (auto span)")
+    ax.set_xlabel("time (auto units)")
     st.pyplot(fig)
-
     if show_data:
-        preview_df = pd.DataFrame({"time_seconds": combined_time, "clean_y": combined_clean})
+        preview_df = pd.DataFrame({"preview_time": preview_time, "clean_y": preview_clean})
         st.dataframe(preview_df)
+    combined_time, combined_clean = build_combined_1d()
     stream_primary = combined_clean
-    stream_noisy_primary = combined_noisy
-    stream_secondary=None
-    stream_noisy_secondary=None
+    stream_secondary = None
 
 elif mode == "Straight Line":
-    combined_time, clean_x, clean_y, noisy_y = build_combined_straight()
+    preview_time, preview_clean = build_preview_straight()
     fig, ax = plt.subplots(figsize=(8,4))
-    ax.plot(combined_time, clean_y, label="Clean", linewidth=clean_linewidth, color=clean_color)
-    ax.legend(); ax.grid(True); ax.set_title("Multi Straight Line (Clean Preview)")
+    ax.plot(preview_time, preview_clean, label="Clean", linewidth=clean_linewidth, color=clean_color)
+    if preview_time.size:
+        ax.set_xlim(preview_time.min(), preview_time.max())
+    if preview_clean.size:
+        y_min, y_max = float(np.min(preview_clean)), float(np.max(preview_clean))
+        y_pad = max(1e-3, (y_max - y_min) * 0.05)
+        ax.set_ylim(y_min - y_pad, y_max + y_pad)
+    ax.legend(); ax.grid(True); ax.set_title("Straight-Line Preview (auto span)")
+    ax.set_xlabel("time (auto units)")
+    ax.set_ylabel("y(t)")
     st.pyplot(fig)
+    st.caption("Preview uses an internally computed span so the entire segment is framed cleanly.")
     if show_data:
-        df_line = pd.DataFrame({"time_seconds": combined_time, "clean_x": clean_x, "clean_y": clean_y})
+        df_line = pd.DataFrame({"preview_time": preview_time, "clean_y": preview_clean})
         st.dataframe(df_line)
+    combined_time, clean_x, clean_y = build_combined_straight()
     stream_primary = clean_y
-    stream_noisy_primary = noisy_y
     stream_secondary = clean_x
-    stream_noisy_secondary = None
 
 elif mode == "2D Expression":
-    combined_time, clean_x, clean_y, noisy_x, noisy_y = build_combined_2d()
+    preview_x, preview_y = build_preview_2d()
     fig, ax = plt.subplots(figsize=(6,6))
-    ax.plot(clean_x, clean_y, label="Clean", linewidth=clean_linewidth, color=clean_color)
-    ax.legend(); ax.grid(True); ax.set_title("Multi 2D Expression (Clean Preview)")
+    ax.plot(preview_x, preview_y, label="Clean", linewidth=clean_linewidth, color=clean_color)
+    if preview_x.size and preview_y.size:
+        x_min, x_max = float(np.min(preview_x)), float(np.max(preview_x))
+        y_min, y_max = float(np.min(preview_y)), float(np.max(preview_y))
+        x_pad = max(1e-3, (x_max - x_min) * 0.05)
+        y_pad = max(1e-3, (y_max - y_min) * 0.05)
+        ax.set_xlim(x_min - x_pad, x_max + x_pad)
+        ax.set_ylim(y_min - y_pad, y_max + y_pad)
+        ax.set_aspect("equal", adjustable="box")
+    ax.legend(); ax.grid(True); ax.set_title("2D Preview (auto span)")
     st.pyplot(fig)
     if show_data:
-        df2 = pd.DataFrame({"time_seconds": combined_time, "clean_x": clean_x, "clean_y": clean_y})
+        df2 = pd.DataFrame({"preview_x": preview_x, "preview_y": preview_y})
         st.dataframe(df2)
+    combined_time, clean_x, clean_y = build_combined_2d()
     stream_primary = clean_y
-    stream_noisy_primary = noisy_y
     stream_secondary = clean_x
-    stream_noisy_secondary = noisy_x
 
 # init streaming state variables
 if "stream_array_len" not in st.session_state:
@@ -636,9 +836,7 @@ with left:
             st.session_state.stream_time_index = 0
             st.session_state.final_output_mode = None
             st.session_state.final_output_ready = False
-            for k in ["streamed_times","streamed_clean_primary","streamed_noisy_primary","streamed_clean_secondary","streamed_noisy_secondary"]:
-                if k in st.session_state:
-                    del st.session_state[k]
+            reset_stream_buffers()
     elif st.session_state.stream_state == "running":
         if st.button("Pause Streaming", key="pause_stream_btn", type="primary"):
             st.session_state.stream_state = "paused"
@@ -652,9 +850,7 @@ with right:
         st.session_state.stream_time_index = 0
         st.session_state.final_output_mode = None
         st.session_state.final_output_ready = False
-        for k in ["streamed_times","streamed_clean_primary","streamed_noisy_primary","streamed_clean_secondary","streamed_noisy_secondary"]:
-            if k in st.session_state:
-                del st.session_state[k]
+        reset_stream_buffers()
 st.markdown('</div>', unsafe_allow_html=True)
 
 # -------------------------
@@ -664,9 +860,17 @@ if st.session_state.stream_state == "running":
     st.subheader("Real-Time Streaming")
     time_arr = np.asarray(combined_time, dtype=float)
     clean_primary_arr = np.asarray(stream_primary, dtype=float)
-    noisy_primary_arr = np.asarray(stream_noisy_primary, dtype=float) if stream_noisy_primary is not None else None
     clean_secondary_arr = np.asarray(stream_secondary, dtype=float) if stream_secondary is not None else None
-    noisy_secondary_arr = np.asarray(stream_noisy_secondary, dtype=float) if stream_noisy_secondary is not None else None
+    seed_hint = int(seed_value) if seed_value >= 0 else None
+    need_secondary_noise = (mode == "2D Expression")
+    noise_primary_arr, noise_secondary_arr = prepare_noise_buffers(
+        total_len=len(time_arr),
+        need_secondary=need_secondary_noise,
+        mode_label=mode,
+        noise_kind=noise_type,
+        strength=noise_strength,
+        seed_hint=seed_hint,
+    )
 
     streamed_times = st.session_state.get("streamed_times", [])
     streamed_clean_primary = st.session_state.get("streamed_clean_primary", [])
@@ -687,9 +891,15 @@ if st.session_state.stream_state == "running":
     while idx < total_len and st.session_state.stream_state == "running":
         t_val = float(time_arr[idx])
         c_primary = float(clean_primary_arr[idx])
-        noisy_primary_val = float(noisy_primary_arr[idx]) if noisy_primary_arr is not None else c_primary
+        noisy_offset = float(noise_primary_arr[idx]) if len(noise_primary_arr) > idx else 0.0
+        noisy_primary_val = c_primary + noisy_offset
         c_secondary = float(clean_secondary_arr[idx]) if clean_secondary_arr is not None else None
-        noisy_secondary_val = float(noisy_secondary_arr[idx]) if noisy_secondary_arr is not None else c_secondary
+        noisy_secondary_val = None
+        if c_secondary is not None:
+            if need_secondary_noise and noise_secondary_arr is not None and len(noise_secondary_arr) > idx:
+                noisy_secondary_val = float(c_secondary + noise_secondary_arr[idx])
+            else:
+                noisy_secondary_val = c_secondary
 
         streamed_times.append(t_val)
         streamed_clean_primary.append(c_primary)
@@ -705,7 +915,7 @@ if st.session_state.stream_state == "running":
             "noise_value": (noisy_primary_val - c_primary),
             "clean_x": c_secondary,
             "noisy_x": noisy_secondary_val,
-            "noise_value_x": (noisy_secondary_val - c_secondary) if c_secondary is not None else None,
+            "noise_value_x": (noisy_secondary_val - c_secondary) if c_secondary is not None and noisy_secondary_val is not None else None,
             "noise_value_y": (noisy_primary_val - c_primary),
         }
 
@@ -720,6 +930,7 @@ if st.session_state.stream_state == "running":
                 st.session_state.stream_time_index = 0
                 st.session_state.final_output_mode = None
                 st.session_state.final_output_ready = False
+                reset_stream_buffers()
                 break
 
         sent += 1
@@ -780,6 +991,34 @@ elif st.session_state.stream_state == "paused":
     st.info("Streaming paused. Click Resume to continue.")
 else:
     st.info("Stream is idle. Configure simulation and press Start Streaming.")
+
+if show_data:
+    streamed_times = st.session_state.get("streamed_times", [])
+    if streamed_times:
+        times_arr = np.asarray(streamed_times, dtype=float)
+        clean_primary_arr = np.asarray(st.session_state.get("streamed_clean_primary", []), dtype=float)
+        noisy_primary_arr = np.asarray(st.session_state.get("streamed_noisy_primary", []), dtype=float)
+        data = {
+            "time_seconds": times_arr,
+            "clean_y": clean_primary_arr,
+            "noisy_y": noisy_primary_arr,
+            "noise_value": noisy_primary_arr - clean_primary_arr,
+        }
+        clean_secondary = st.session_state.get("streamed_clean_secondary", [])
+        noisy_secondary = st.session_state.get("streamed_noisy_secondary", [])
+        if len(clean_secondary):
+            clean_secondary_arr = np.asarray(clean_secondary, dtype=float)
+            if len(noisy_secondary):
+                noisy_secondary_arr = np.asarray(noisy_secondary, dtype=float)
+            else:
+                noisy_secondary_arr = clean_secondary_arr
+            data["clean_x"] = clean_secondary_arr
+            data["noisy_x"] = noisy_secondary_arr
+            data["noise_value_x"] = noisy_secondary_arr - clean_secondary_arr
+        st.markdown("#### Streamed Samples")
+        st.dataframe(pd.DataFrame(data))
+    elif st.session_state.stream_state == "running":
+        st.info("Data table will populate after the first streamed sample.")
 
 final_mode = st.session_state.get("final_output_mode")
 final_ready = st.session_state.get("final_output_ready", False)
